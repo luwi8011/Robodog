@@ -220,6 +220,8 @@ void loop()
 
 
 
+
+
 // Calibration speed for sweeping the leg
 const int calibrationSpeed = 100;        // Adjust this value to control the sweep speed
 unsigned long lastChangeTime = 0;        // Time when the smoothedValue last changed
