@@ -3,7 +3,6 @@
 #include <PID_v1.h>
 #include <EEPROM.h>
 
-
 // Variables to store the minimum and maximum potentiometer values (as voltate not angle)
 double minSmoothedValue = 1023; // Start with the maximum possible value for min
 double maxSmoothedValue = 0;    // Start with the minimum possible value for max
@@ -193,8 +192,6 @@ void loop()
     // Check if 10 milliseconds have passed and if smoothe() has been called less than 10 times
     if (currentMillis - previousMillis >= interval)
     {
-      previousMillis = currentMillis; // update the last time smoothe() was called
-
       smoothedValue = (alpha * analogRead(rawValue)) + ((1 - alpha) * smoothedValue); // Apply EMA
       callCount++;                                                                    // increment the call counter
 
@@ -204,6 +201,7 @@ void loop()
         smootheComplete = true; // mark smoothe task as complete
         callCount = 0;          // reset the call counter for the next loop
       }
+      previousMillis = currentMillis; // update the last time smoothe() was called
     }
   }
   else
@@ -218,13 +216,8 @@ void loop()
   }
 }
 
-
-
-
-
 // Calibration speed for sweeping the leg
 const int calibrationSpeed = 100;        // Adjust this value to control the sweep speed
-unsigned long lastChangeTime = 0;        // Time when the smoothedValue last changed
 double lastSmoothedValue = 0;            // The last recorded smoothedValue
 const unsigned long stallTimeout = 1000; // 1 second timeout to detect stall
 const double changeThreshold = 1.0;      // Minimum change in smoothedValue to reset the timer
@@ -232,6 +225,7 @@ const double changeThreshold = 1.0;      // Minimum change in smoothedValue to r
 bool isMotorStalled()
 {
   unsigned long currentMillis = millis(); // Get the current time
+  static unsigned long lastChangeTime = 0;        // Time when the smoothedValue last changed
 
   // Check if the smoothedValue has changed significantly
   if (abs(smoothedValue - lastSmoothedValue) > changeThreshold)
@@ -369,7 +363,7 @@ void receiveEvent(int numBytes)
     }
   }
 
-  // If three bytes are recieved then check if its calling CAL for calibrate function or SOS for safe mode
+  // If three bytes are received then check if its calling CAL for calibrate function or SOS for safe mode
   else if (numBytes == 3)
   {                          // If 3 bytes are received, check for "PID"
     char receivedMessage[4]; // Array to hold the received message
