@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <PID_v1.h>
 #include <EEPROM.h>
+#include <avr/wdt.h>
 
 // Variables to store the minimum and maximum potentiometer values (as voltate not angle)
 double minSmoothedValue = 1023; // Start with the maximum possible value for min
@@ -19,9 +20,7 @@ bool smootheComplete = false;     // flag to indicate if smoothe() has been call
 int rawValue = A0;        // Read potentiometer value (0 to 1023)
 const int maxAngle = 180; // Maximum angle (e.g., 0 to 180 degrees)
 
-#define MotEnable 6 // Motor Enamble pin Runs on PWM signal
-#define MotFwd 9    // Motor Forward pin
-#define MotRev 8    // Motor Reverse pin
+
 
 // Define PID variables
 double currentAngle; // Current angle from the potentiometer
@@ -35,7 +34,9 @@ double Kp = 2.0, Ki = 5.0, Kd = 1.0;
 PID myPID(&currentAngle, &motorOutput, &targetAngle, Kp, Ki, Kd, DIRECT);
 
 // If the PWM value sent to the motors is less than +- this value then hold the motors locked
-int motorLockOffset = 5;
+const int addrDeadZone = sizeof(float) * 6; // EEPROM address for deadZone
+int defaultDeadZone = 5; // Default deadZone value
+int deadZone = 0;
 
 // Flag to indicate new data received
 volatile bool newDataReceived = false;
@@ -56,29 +57,49 @@ const byte markerValue = 0x55;            // Arbitrary value to mark EEPROM init
 const byte SLAVE_ADDRESS = 0x08;
 void receiveEvent(int numBytes);
 
+
+// used for safemode timing
+unsigned long lastMessageTime = 0;  // Tracks the time when the last message was received
+bool safeModeActive = false;  // Flag to indicate if safe mode is active
+
+
+#define LED_R_PIN 10
+#define LED_G_PIN 11
+#define LED_B_PIN 12
+
+#define MotEnable 6 // Motor Enamble pin Runs on PWM signal
+#define MotFwd 9    // Motor Forward pin
+#define MotRev 8    // Motor Reverse pin
+
+
 /*
-Features checklist:
-*Receive various message lengths from I2c master
-*if message is int from 0-255 then use this number as the target angle in the PID loop
-    *exponential moving average on the POT
-    *Use PID library and make it capable of forward and reverse
-    *Integrate LED color
-*If message is three letter word check the following
-    *If "CAL" then run calibrate function which sweeps full travel of joint and records min and max angles to EEPROM
-      *Integrate LED color
-    *If "SOS" then run safe mode where motors are set to 0 pwm
-      *Integrate LED color
-
-
 
 ToDo:
-  make the calibration speed defined over I2c so that we can start with a slow PWM
-  make an I2c message that defines the deadzone size and store it to EEPROM
-  finish the SOS safemode. if we havnt heard a message is 2 seconds failsafe to motors off
-  come up with more uses for the LED
-  add a reset command over I2c to reset the arduino (might not be needed)
+  Ensure that the LED pins and the Motor pins are defined corrrectly as per Schematic
+
+
+  DONE-make the calibration speed defined over I2c so that we can start with a slow PWM
+  DONE-make an I2c message that defines the deadzone size and store it to EEPROM
+  DONE-finish the SOS safemode. if we havnt heard a message is 2 seconds failsafe to motors off
+  DONE-come up with more uses for the LED
+  DONE-add a reset command over I2c to reset the arduino (might not be needed)
+
 
 */
+
+void setupLEDs() {
+    pinMode(LED_R_PIN, OUTPUT);
+    pinMode(LED_G_PIN, OUTPUT);
+    pinMode(LED_B_PIN, OUTPUT);
+}
+
+void setLEDColor(int red, int green, int blue) {
+    analogWrite(LED_R_PIN, red);
+    analogWrite(LED_G_PIN, green);
+    analogWrite(LED_B_PIN, blue);
+}
+
+
 
 void initializeEEPROM()
 {
@@ -96,6 +117,9 @@ void initializeEEPROM()
     EEPROM.put(addrKp, defaultKp);
     EEPROM.put(addrKi, defaultKi);
     EEPROM.put(addrKd, defaultKd);
+
+    // Store the default deadZone value in EEPROM
+    EEPROM.put(addrDeadZone, defaultDeadZone);
 
     // Write marker value to indicate initialization
     EEPROM.put(addrMarker, markerValue);
@@ -126,8 +150,31 @@ void loadCalibrationValuesFromEEPROM()
   Serial.println(maxSmoothedValue);
 }
 
+void loadDeadZoneFromEEPROM()
+{
+    int storedDeadZone;
+    EEPROM.get(addrDeadZone, storedDeadZone);
+
+    // Validate the loaded value to ensure it's within a reasonable range
+    if (storedDeadZone >= 0 && storedDeadZone <= 255)
+    {
+        deadZone = storedDeadZone;
+        Serial.print("Loaded deadZone from EEPROM: ");
+        Serial.println(deadZone);
+    }
+    else
+    {
+        // If the loaded value is invalid, use the default deadZone
+        deadZone = 5; // Default deadZone value
+        Serial.println("Invalid deadZone in EEPROM. Using default value: 5");
+    }
+}
+
 void setup()
 {
+  setupLEDs(); //setup the LED
+  setLEDColor(0, 0, 255); // Blue on to show initialization
+
   Wire.begin(SLAVE_ADDRESS);    // Initialize I2C communication as a slave
   Wire.onReceive(receiveEvent); // Register the receive event function
   Serial.begin(9600);           // Initialize serial communication for debugging
@@ -146,6 +193,13 @@ void setup()
   initializeEEPROM();                // Initialize EEPROM with default values if not already initialized
   loadPIDFromEEPROM();               // Load stored PID values from EEPROM
   loadCalibrationValuesFromEEPROM(); // Load stored calibration values from EEPROM
+  loadDeadZoneFromEEPROM();          // Load stored deadzone values from EEPROM
+
+  
+  setLEDColor(0, 255, 0);// set LED green to show that setup has completed
+
+  Serial.print("Loaded deadZone: ");
+  Serial.println(deadZone);
 }
 
 // Function to be executed if the message is between 0 and 255 (Target angle for PID)
@@ -159,14 +213,14 @@ void target()
   myPID.Compute();
   int pwmValue = (int)motorOutput;
 
-  if (pwmValue > motorLockOffset)
+  if (pwmValue > deadZone)
   {
     // Forward direction
     digitalWrite(MotFwd, HIGH);       // Set forward direction
     digitalWrite(MotRev, LOW);        // Ensure reverse is off
     analogWrite(MotEnable, pwmValue); // Set PWM for speed
   }
-  else if (pwmValue < -motorLockOffset)
+  else if (pwmValue < -deadZone)
   {
     // Reverse direction
     digitalWrite(MotFwd, LOW);             // Ensure forward is off
@@ -182,8 +236,39 @@ void target()
   }
 }
 
+
+
+// Function to be executed if the message is "SOS"
+void safeMode()
+{
+    // Disable the motors
+    analogWrite(MotEnable, 0);
+    digitalWrite(MotFwd, LOW);
+    digitalWrite(MotRev, LOW);
+
+    // Set LED to continuous red
+    setLEDColor(255, 0, 0);
+
+    // Set the safe mode flag
+    safeModeActive = true;
+
+    Serial.println("Safe mode activated: Motors disabled.");
+}
+
 void loop()
 {
+
+
+  if (safeModeActive) {
+        // If safe mode is active, do nothing
+        setLEDColor(255, 0, 0); // set LED red to show safe mode is active
+        return;
+    }
+
+    // Check if 2000 milliseconds have passed since the last message was received
+    if (millis() - lastMessageTime >= 2000) {
+        safeMode();  // Activate safe mode if no message was received within the timeout period
+    }
 
   if (newDataReceived)
   {                                                                                 // if the flag is set true (new target) target the new angle
@@ -218,6 +303,7 @@ void loop()
 
     // calls the target function which uses the last received target angle and the current potentiometer angle PID
     target();
+    setLEDColor(0, 255, 0);// set LED color green to show normal operation
 
     // Once the next task is complete, reset the smootheComplete flag
     smootheComplete = false;
@@ -225,7 +311,7 @@ void loop()
 }
 
 // Calibration speed for sweeping the leg
-const int calibrationSpeed = 100;        // Adjust this value to control the sweep speed
+//const int calibrationSpeed = 100;        // Adjust this value to control the sweep speed. Now gets passed through by the I2c CAL command
 double lastSmoothedValue = 0;            // The last recorded smoothedValue
 const unsigned long stallTimeout = 1000; // 1 second timeout to detect stall
 const double changeThreshold = 1.0;      // Minimum change in smoothedValue to reset the timer
@@ -246,6 +332,13 @@ bool isMotorStalled()
   // If no significant change has occurred for 1 second, return true (indicating a stall)
   if (currentMillis - lastChangeTime >= stallTimeout)
   {
+    // Blink red fast to indicate motor stall
+    for (int i = 0; i < 5; i++) {
+        setLEDColor(255, 0, 0); // Red on
+        delay(100);
+        setLEDColor(0, 0, 0); // LED off
+        delay(100);
+    }
     return true;
   }
 
@@ -253,7 +346,7 @@ bool isMotorStalled()
 }
 
 // Function to sweep the leg from one extreme to the other while recording the minimum and maximum smoothed values
-void sweepLegAndRecordExtremes()
+void sweepLegAndRecordExtremes(int calibrationSpeed)
 {
   // Move the leg in one direction (e.g., open the leg)
   while (true)
@@ -321,12 +414,12 @@ void sweepLegAndRecordExtremes()
 }
 
 // Function to be executed if the message is "CAL"
-void calibrateJoint()
+void calibrateJoint(int calibrationSpeed)
 {
   Serial.println("Starting calibration...");
 
   // Move the leg from fully open to fully closed position while recording the extremes
-  sweepLegAndRecordExtremes();
+  sweepLegAndRecordExtremes(calibrationSpeed);
 
   // Store the min and max smoothed values to EEPROM
   EEPROM.put(addrMinSmoothedValue, minSmoothedValue);
@@ -342,12 +435,7 @@ void calibrateJoint()
   Serial.println("Calibration complete. Use these values in the map function.");
 }
 
-// Function to be executed if the message is "SOS"
-void safeMode()
-{
-  Serial.println("Executing safemode: SOS command received");
-  // Add your code here to handle the safeMode command
-}
+
 
 void storePIDToEEPROM(float Kp, float Ki, float Kd)
 {
@@ -356,74 +444,111 @@ void storePIDToEEPROM(float Kp, float Ki, float Kd)
   EEPROM.put(addrKd, Kd);
 }
 
+
+
+void reboot() {
+    wdt_enable(WDTO_15MS);  // Enable watchdog timer to reset the system in 15ms
+    while (true) {}         // Wait for the watchdog timer to reset the system
+}
+
+
+
+
 // This function is called whenever data is received from the master.
 void receiveEvent(int numBytes)
 {
+    // Buffer to hold the received message
+    char receivedMessage[8];
+    int index = 0;
 
-  // filters for angle signals
-  if (numBytes == 1)
-  {
-    int receivedNumber = Wire.read(); // Read the incoming byte as an integer
-    if (receivedNumber >= 0 && receivedNumber <= 255)
+    // Read the message into the buffer
+    while (Wire.available() && index < numBytes)
     {
-      targetAngle = receivedNumber;
-      newDataReceived = true; // Set the flag indicating new data received so that the main loop runs target asap
+        receivedMessage[index] = Wire.read();
+        index++;
     }
-  }
+    receivedMessage[index] = '\0'; // Null-terminate the string
 
-  // If three bytes are received then check if its calling CAL for calibrate function or SOS for safe mode
-  else if (numBytes == 3)
-  {                          // If 3 bytes are received, check for "PID"
-    char receivedMessage[4]; // Array to hold the received message
-    for (int i = 0; i < 3; i++)
+
+  
+
+    // Check if the message is "RES" (reboot command)
+    if (strcmp(receivedMessage, "RES") == 0)
     {
-      receivedMessage[i] = Wire.read(); // Read each byte into the array
+        reboot(); // Call reboot() if the message is "RES"
     }
-    receivedMessage[3] = '\0'; // Null-terminate the string
 
-    if (strcmp(receivedMessage, "CAL") == 0)
+    // If safe mode is active, ignore all other commands except reboot
+    if (safeModeActive) {
+        return;
+    }
+
+    // Reset the last message time whenever a valid message is received
+    lastMessageTime = millis();
+
+     // Check if the received message is a single byte that represents a target angle
+    if (numBytes == 1)
     {
-      calibrateJoint(); // Call calibrateJoint if the message is "CAL"
+        int receivedNumber = receivedMessage[0]; // Read the first byte as an integer
+        if (receivedNumber >= 0 && receivedNumber <= 255)
+        {
+            targetAngle = receivedNumber; // Update the targetAngle
+            newDataReceived = true; // Set the flag indicating new data received
+            Serial.print("New target angle: ");
+            Serial.println(targetAngle);
+        }
     }
-    if (strcmp(receivedMessage, "SOS") == 0)
+    // Handle different commands based on the message content
+    else if (strncmp(receivedMessage, "CAL", 3) == 0)
     {
-      safeMode(); // Call safeMode if the message is "SOS"
+        int calValue = atoi(receivedMessage + 3); // Convert the number after "CAL" to an integer
+        calibrateJoint(calValue); // Call calibrate function with the extracted number
     }
-  }
-  // Handle a message containing PID tuning parameters
-  else if (numBytes == 7)
-  {                                // 1 byte identifier + 6 bytes for Kp, Ki, Kd
-    char identifier = Wire.read(); // Read the first byte (identifier)
-
-    if (identifier == 'P')
-    { // If the identifier indicates PID tuning parameters
-      byte KpBytes[2], KiBytes[2], KdBytes[2];
-
-      // Read the bytes for each PID parameter
-      KpBytes[0] = Wire.read();
-      KpBytes[1] = Wire.read();
-      KiBytes[0] = Wire.read();
-      KiBytes[1] = Wire.read();
-      KdBytes[0] = Wire.read();
-      KdBytes[1] = Wire.read();
-
-      // Combine the two bytes into a float or fixed-point representation
-      Kp = (float)((KpBytes[0] << 8) | KpBytes[1]) / 100.0;
-      Ki = (float)((KiBytes[0] << 8) | KiBytes[1]) / 100.0;
-      Kd = (float)((KdBytes[0] << 8) | KdBytes[1]) / 100.0;
-
-      // Update the PID controller with the new parameters
-      myPID.SetTunings(Kp, Ki, Kd);
-
-      // Store the new PID values in EEPROM
-      storePIDToEEPROM(Kp, Ki, Kd);
-
-      Serial.print("New Kp: ");
-      Serial.println(Kp);
-      Serial.print("New Ki: ");
-      Serial.println(Ki);
-      Serial.print("New Kd: ");
-      Serial.println(Kd);
+    else if (strcmp(receivedMessage, "SOS") == 0)
+    {
+        safeMode(); // Call safeMode if the message is "SOS"
     }
-  }
+    else if (strncmp(receivedMessage, "DED", 3) == 0)
+    {
+        // Extract the deadZone value following "DED"
+        int newDeadZone = atoi(&receivedMessage[3]);
+
+        // Validate and update deadZone
+        if (newDeadZone >= 0 && newDeadZone <= 255)
+        {
+            deadZone = newDeadZone;
+            EEPROM.put(addrDeadZone, deadZone); // Save the new deadZone value to EEPROM
+            Serial.print("New deadZone saved: ");
+            Serial.println(deadZone);
+        }
+    }
+    // Handle a message containing PID tuning parameters
+    else if (numBytes == 7 && receivedMessage[0] == 'P')
+    {
+        byte KpBytes[2], KiBytes[2], KdBytes[2];
+        KpBytes[0] = Wire.read();
+        KpBytes[1] = Wire.read();
+        KiBytes[0] = Wire.read();
+        KiBytes[1] = Wire.read();
+        KdBytes[0] = Wire.read();
+        KdBytes[1] = Wire.read();
+
+        // Combine the two bytes into a float or fixed-point representation
+        Kp = (float)((KpBytes[0] << 8) | KpBytes[1]) / 100.0;
+        Ki = (float)((KiBytes[0] << 8) | KiBytes[1]) / 100.0;
+        Kd = (float)((KdBytes[0] << 8) | KdBytes[1]) / 100.0;
+
+        // Update the PID controller with the new parameters
+        myPID.SetTunings(Kp, Ki, Kd);
+
+        // Store the new PID values in EEPROM
+        storePIDToEEPROM(Kp, Ki, Kd);
+
+        Serial.print("New Kp: ");
+        Serial.println(Kp);
+        Serial.print("New Ki: ");
+        Serial.println(Ki);
+        Serial.print("New Kd: ");
+        Serial.println(Kd);
+    }
 }
