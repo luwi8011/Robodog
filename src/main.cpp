@@ -70,6 +70,14 @@ Features checklist:
       *Integrate LED color
 
 
+
+ToDo:
+  make the calibration speed defined over I2c so that we can start with a slow PWM
+  make an I2c message that defines the deadzone size and store it to EEPROM
+  finish the SOS safemode. if we havnt heard a message is 2 seconds failsafe to motors off
+  come up with more uses for the LED
+  add a reset command over I2c to reset the arduino (might not be needed)
+
 */
 
 void initializeEEPROM()
