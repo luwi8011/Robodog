@@ -17,8 +17,7 @@ const long interval = 10;         // interval of 10 milliseconds
 int callCount = 0;                // counter for smoothe() calls
 bool smootheComplete = false;     // flag to indicate if smoothe() has been called 10 times
 
-int rawValue = A6;        // Read potentiometer value (0 to 1023)
-const int maxAngle = 180; // Maximum angle (e.g., 0 to 180 degrees)
+
 
 
 
@@ -67,24 +66,18 @@ bool safeModeActive = false;  // Flag to indicate if safe mode is active
 #define LED_G_PIN 11
 #define LED_B_PIN 3
 
-#define MotEnable 6 // Motor Enamble pin Runs on PWM signal
-#define MotFwd 9    // Motor Forward pin
-#define MotRev 8    // Motor Reverse pin
+#define MotEnable 9 // Motor Enamble pin Runs on PWM signal
+#define MotFwd 5    // Motor Forward pin
+#define MotRev 6    // Motor Reverse pin
+
+int rawValue = A6;        // Read potentiometer value (0 to 1023)
+const int maxAngle = 180; // Maximum angle (e.g., 0 to 180 degrees)
+
 
 
 /*
-
-ToDo:
-  Ensure that the LED pins and the Motor pins are defined corrrectly as per Schematic
-
-
-  DONE-make the calibration speed defined over I2c so that we can start with a slow PWM
-  DONE-make an I2c message that defines the deadzone size and store it to EEPROM
-  DONE-finish the SOS safemode. if we havnt heard a message is 2 seconds failsafe to motors off
-  DONE-come up with more uses for the LED
-  DONE-add a reset command over I2c to reset the arduino (might not be needed)
-
-
+A0 reads the multisense pin
+Digital pin 7 is an output for the select pin on the H bridge, this selects what information is sent to A0
 */
 
 void setupLEDs() {
@@ -184,7 +177,7 @@ void setup()
   pinMode(MotFwd, OUTPUT);
   pinMode(MotRev, OUTPUT);
 
-  pinMode(rawValue, INPUT);
+  //pinMode(rawValue, INPUT);  not needed because analog pins are inputs by default
 
   myPID.SetMode(AUTOMATIC);         // set PID in Auto mode
   myPID.SetSampleTime(100);         // refresh rate of PID controller
