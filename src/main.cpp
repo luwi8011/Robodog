@@ -17,7 +17,7 @@ const long interval = 10;         // interval of 10 milliseconds
 int callCount = 0;                // counter for smoothe() calls
 bool smootheComplete = false;     // flag to indicate if smoothe() has been called 10 times
 
-int rawValue = A0;        // Read potentiometer value (0 to 1023)
+int rawValue = A6;        // Read potentiometer value (0 to 1023)
 const int maxAngle = 180; // Maximum angle (e.g., 0 to 180 degrees)
 
 
@@ -65,7 +65,7 @@ bool safeModeActive = false;  // Flag to indicate if safe mode is active
 
 #define LED_R_PIN 10
 #define LED_G_PIN 11
-#define LED_B_PIN 12
+#define LED_B_PIN 3
 
 #define MotEnable 6 // Motor Enamble pin Runs on PWM signal
 #define MotFwd 9    // Motor Forward pin
