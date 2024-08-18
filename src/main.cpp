@@ -27,7 +27,7 @@ double targetAngle;  // Desired target angle
 double motorOutput;  // Output value for the motor controller (0-255 for PWM)
 
 // Define PID tuning parameters
-double Kp = 2.0, Ki = 5.0, Kd = 1.0;
+double Kp = 1.75, Ki = 0.2, Kd = 0.75;
 
 // Create PID controller object
 PID myPID(&currentAngle, &motorOutput, &targetAngle, Kp, Ki, Kd, DIRECT);
@@ -103,9 +103,9 @@ void initializeEEPROM()
   if (storedMarker != markerValue)
   {
     // EEPROM is not initialized, write default values
-    float defaultKp = 2.0;
-    float defaultKi = 5.0;
-    float defaultKd = 1.0;
+    float defaultKp = 1.75;
+    float defaultKi = .2;
+    float defaultKd = .75;
 
     EEPROM.put(addrKp, defaultKp);
     EEPROM.put(addrKi, defaultKi);
