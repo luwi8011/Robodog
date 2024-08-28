@@ -4,9 +4,27 @@
 #include <EEPROM.h>
 #include <avr/wdt.h>
 
-// Variables to store the minimum and maximum potentiometer values (as voltate not angle)
+/*
+issues with initial testing
+
+DONE - RES command didnt work: change from watchdog timer to resetting safemode flag. later can change this to a reboot command
+DONE - Safemode too sensitive for current testing: disaible for now
+DONE - Calibrate command not sensitive enough at detecting motion stop/motor stall - Changed stallTimeout and changeThreshold to increase sensitivity 
+DOEN - on boot set current angle as target angle to stop motion on boot
+DONE - Calibrated min and max values were never used in map function
+DONE - Add in command to read current angle. Master can request the current angle with "GET" then the slave will write the current angle
+
+Fixed an error where the default min and max smoothed values were neverloaded into the EEPROM, causing an error when the code initializes and the arduino tries to get the eeprom saved values.
+The fix for this was to put the pre calibration values in EEPROM. These values are unusable, so before you are able to move this leg you MUST run calibration. 
+*/
+
+
+
+
+// Variables to store the minimum and maximum potentiometer values (as voltage not angle)
 double minSmoothedValue = 1023; // Start with the maximum possible value for min
 double maxSmoothedValue = 0;    // Start with the minimum possible value for max
+
 
 // EEPROM Addresses for storing min and max smoothed values
 const int addrMinSmoothedValue = sizeof(float) * 4; // Offset addresses for min and max values
@@ -114,6 +132,12 @@ void initializeEEPROM()
     // Store the default deadZone value in EEPROM
     EEPROM.put(addrDeadZone, defaultDeadZone);
 
+
+    // Store the default minsmoothedvalue value in EEPROM
+    EEPROM.put(addrMinSmoothedValue, minSmoothedValue);
+    EEPROM.put(addrMaxSmoothedValue, maxSmoothedValue);
+
+
     // Write marker value to indicate initialization
     EEPROM.put(addrMarker, markerValue);
 
@@ -193,6 +217,10 @@ void setup()
 
   Serial.print("Loaded deadZone: ");
   Serial.println(deadZone);
+
+  smoothedValue = (alpha * analogRead(rawValue)) + ((1 - alpha) * smoothedValue); // Apply EMA
+  currentAngle = map(smoothedValue, minSmoothedValue, maxSmoothedValue, 0, maxAngle); // map smoothed potentiometer voltage to angle value
+  targetAngle = currentAngle; //set current angle to target angle at setup so that the leg doesnt
 }
 
 // Function to be executed if the message is between 0 and 255 (Target angle for PID)
@@ -200,7 +228,8 @@ void target()
 {
   Serial.println("Executing PID: target angle received");
 
-  currentAngle = map(smoothedValue, 0, 1023, 0, 180); // Convert to angle (assuming 0-180 degrees)
+  smoothedValue = (alpha * analogRead(rawValue)) + ((1 - alpha) * smoothedValue); // Apply EMA
+  currentAngle = map(smoothedValue, minSmoothedValue, maxSmoothedValue, 0, maxAngle); // map smoothed potentiometer voltage to angle value
 
   // Call the function to calculate PWM output based on current angle and target angle
   myPID.Compute();
@@ -234,6 +263,8 @@ void target()
 // Function to be executed if the message is "SOS"
 void safeMode()
 {
+
+
     // Disable the motors
     analogWrite(MotEnable, 0);
     digitalWrite(MotFwd, LOW);
@@ -265,7 +296,6 @@ void loop()
 
   if (newDataReceived)
   {                                                                                 // if the flag is set true (new target) target the new angle
-    smoothedValue = (alpha * analogRead(rawValue)) + ((1 - alpha) * smoothedValue); // refresh smoothed angle input
     target();                                                                       // Process the new target angle
     newDataReceived = false;                                                        // Reset the flag
   }
@@ -306,8 +336,8 @@ void loop()
 // Calibration speed for sweeping the leg
 //const int calibrationSpeed = 100;        // Adjust this value to control the sweep speed. Now gets passed through by the I2c CAL command
 double lastSmoothedValue = 0;            // The last recorded smoothedValue
-const unsigned long stallTimeout = 1000; // 1 second timeout to detect stall
-const double changeThreshold = 1.0;      // Minimum change in smoothedValue to reset the timer
+const unsigned long stallTimeout = 500; // 1 second timeout to detect stall
+const double changeThreshold = 5.0;      // Minimum change in smoothedValue to reset the timer
 
 bool isMotorStalled()
 {
@@ -322,7 +352,7 @@ bool isMotorStalled()
     lastSmoothedValue = smoothedValue;
   }
 
-  // If no significant change has occurred for 1 second, return true (indicating a stall)
+  // If no significant change has occurred for 0.5 second, return true (indicating a stall)
   if (currentMillis - lastChangeTime >= stallTimeout)
   {
     // Blink red fast to indicate motor stall
@@ -440,9 +470,26 @@ void storePIDToEEPROM(float Kp, float Ki, float Kd)
 
 
 void reboot() {
-    wdt_enable(WDTO_15MS);  // Enable watchdog timer to reset the system in 15ms
-    while (true) {}         // Wait for the watchdog timer to reset the system
+
+  safeModeActive = false; // resets the flag to false to allow code to run again
+  
+    //wdt_enable(WDTO_15MS);  // Enable watchdog timer to reset the system in 15ms
+   // while (true) {}         // Wait for the watchdog timer to reset the system
 }
+
+
+
+void sendCurrentAngle() {
+    
+    smoothedValue = (alpha * analogRead(rawValue)) + ((1 - alpha) * smoothedValue); // Apply EMA
+    currentAngle = map(smoothedValue, minSmoothedValue, maxSmoothedValue, 0, maxAngle); // map smoothed potentiometer voltage to angle value
+    
+    // Convert the currentAngle to a 2-byte integer before sending
+    Wire.write((byte*)&currentAngle, sizeof(currentAngle)); // Write the integer as bytes to the I2C buffer
+    Serial.print("Sent current angle: ");
+    Serial.println(currentAngle);
+}
+
 
 
 
@@ -514,6 +561,10 @@ void receiveEvent(int numBytes)
             Serial.print("New deadZone saved: ");
             Serial.println(deadZone);
         }
+    }
+    else if (strcmp(receivedMessage, "GET") == 0)
+    {
+      sendCurrentAngle();
     }
     // Handle a message containing PID tuning parameters
     else if (numBytes == 7 && receivedMessage[0] == 'P')

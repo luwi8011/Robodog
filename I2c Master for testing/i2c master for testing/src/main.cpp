@@ -3,6 +3,7 @@
 
 #define I2C_SLAVE_ADDRESS 0x08  // Replace with the actual address of your I2C slave device
 #define MESSAGE_INTERVAL 1500   // Time interval in milliseconds
+#define BUFFER_SIZE 32          // Define a buffer size for receiving data
 
 unsigned long previousMillis = 0;  // Variable to store the last time the message was sent
 
@@ -27,6 +28,25 @@ void sendMessageOverI2C(String message) {
   Serial.println(message);
 }
 
+
+
+void receiveDataOverI2C() {
+  Wire.requestFrom(I2C_SLAVE_ADDRESS, sizeof(double)); // Request the correct number of bytes
+
+  double receivedAngle = 0;  // Variable to store the received angle
+
+  // Ensure the number of bytes received matches the expected size
+  if (Wire.available() == sizeof(double)) {
+    Wire.readBytes((char*)&receivedAngle, sizeof(double)); // Read the data into the double variable
+    Serial.print("Received Angle: ");
+    Serial.println(receivedAngle);  // Print the received angle
+  } else {
+    Serial.println("Error: Incorrect data size received.");
+  }
+}
+
+
+
 void loop() {
   unsigned long currentMillis = millis();  // Get the current time
 
@@ -38,10 +58,15 @@ void loop() {
     sendMessageOverI2C("HRT");
   }
 
-  // If there's serial input available, process it
+   // If there's serial input available, process it
   if (Serial.available() > 0) {
     String message = Serial.readStringUntil('\n'); // Read the incoming serial data until newline character
-    sendMessageOverI2C(message);
-  }
+    
+    if (message == "GET") {
+      sendMessageOverI2C("GET");  // Send the GET command to the slave
+      receiveDataOverI2C();       // Receive data from the slave after sending the GET command
+    } else {
+      sendMessageOverI2C(message); // Send any other message over I2C
+    }
 }
 
